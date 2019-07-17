@@ -1,0 +1,465 @@
+---
+title: "High Note data analysis"
+author: "Yuzi Liu"
+date: "11/19/2018"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=TRUE}
+library(dplyr)
+library(ggplot2)
+library(stargazer)
+library(MatchIt)
+library(gridExtra)
+library(car)
+library(corrplot)
+library(knitr)
+opts_chunk$set(echo = TRUE)
+```
+
+# Summary Statistics
+select all adopter assign to a new data frame "premium"
+select all non-adopter assign to a new data frame "free"
+deleting ID from adopter and non adopter since it's not a key variable
+```{r}
+getwd()
+Highnote <- read.csv("HighNote Data Midterm.csv", header = TRUE)
+premium <- subset(Highnote, adopter == 1)
+free <- subset(Highnote, adopter == 0)
+
+premium$ID <- NULL
+free$ID <- NULL
+```
+
+Generate descriptive statistics for the key variables in the data set
+summary the discriptive statistics of adopter and non-adopter
+
+```{r}
+stargazer(premium, type="text", median=TRUE, digits=2, title="adopters summary")
+stargazer(free, type="text", median=TRUE, digits=2, title="Non-adopters summary")
+
+```
+
+do t-tests to compare difference in mean values of the variables for adopter and non-adopter
+
+```{r}
+hn_cov <- c('age', 'male', 'friend_cnt', 'avg_friend_age', 'avg_friend_male', 'friend_country_cnt',
+            'subscriber_friend_cnt', 'songsListened', 'lovedTracks', 'posts', 'playlists',
+            'shouts', 'tenure', 'good_country')
+Highnote %>%
+  group_by(adopter) %>%
+  select(one_of(hn_cov)) %>%
+  summarise_all(funs(mean(., na.rm = T)))
+
+lapply(hn_cov, function(v) {
+  t.test(Highnote[, v] ~ Highnote$adopter)
+})
+```
+
+We can see that the mean difference of all covariates are significant.
+From these comparisons, we can make a tenative conclusion that: 
+* Users who are older, male, and their friends are older, tend to become fee-users 
+* Users who have more friends, and more friends from different countries, tend to become fee-users. 
+* Users who have more premium friends, tend to become fee-users. 
+* Users who are more engaging (listened more songs, loved more tracks, made more posts and playlists, received more shouts, been on the site longer) are more likely to become fee-users. 
+
+
+# Data Visualization
+* (i) Demographics  
+```{r}
+plot1 <- ggplot(data = Highnote, 
+       mapping = aes(x = age)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+plot2 <-  ggplot(data = Highnote, 
+       mapping = aes(x = male)) +
+  geom_histogram() +
+  facet_wrap(~ adopter)
+
+grid.arrange(plot1, plot2, ncol=2)
+
+ggplot(data = Highnote, 
+       mapping = aes(x = good_country)) +
+  geom_histogram() +
+  facet_wrap(~ adopter)
+
+```
+
+
+* (ii) Peer Influence
+
+```{r}
+plot3 <- ggplot(data = Highnote, 
+       mapping = aes(x = friend_cnt)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+plot4 <- ggplot(data = Highnote, 
+       mapping = aes(x = avg_friend_age)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+grid.arrange(plot3, plot4, ncol=2)
+
+plot5 <- ggplot(data = Highnote, 
+       mapping = aes(x = avg_friend_male)) +
+  geom_histogram() +
+  facet_wrap(~ adopter)
+
+plot6 <- ggplot(data = Highnote, 
+       mapping = aes(x = friend_country_cnt)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+grid.arrange(plot5, plot6, ncol=2)
+
+ggplot(data = Highnote, 
+       mapping = aes(x = subscriber_friend_cnt)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+```
+
+
+* (iii) User Engagement
+
+```{r}
+plot7 <- ggplot(data = Highnote, 
+       mapping = aes(x = songsListened)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+plot8 <- ggplot(data = Highnote, 
+       mapping = aes(x = lovedTracks)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+grid.arrange(plot7, plot8, ncol=2)
+
+plot9 <- ggplot(data = Highnote, 
+       mapping = aes(x = posts)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+plot10 <- ggplot(data = Highnote, 
+       mapping = aes(x = playlists)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+
+grid.arrange(plot9, plot10, ncol=2)
+
+ggplot(data = Highnote, 
+       mapping = aes(x = tenure)) +
+  geom_density() +
+  facet_wrap(~ adopter)
+```
+
+From the visualization, we can make same conclusion as the mean difference analysis that: 
+* Users who are older, male, and their friends are older, tend to become fee-users Users who have more friends, and more friends from different countries, tend to become fee-users.  
+* Users who have more premium friends, tend to become fee-users.  
+* Users who are more engaging (listened more songs, loved more tracks, made more posts and playlists, received more shouts, been on the site longer) are more likely to become fee-users. 
+
+# Propensity Score Matching
+
+create treatment and control groups 
+* "treatment" group: users that have one or more subscriber friends (subscriber_friend_cnt >= 1)
+* "control" group:  users with zero subscriber friends (subscriber_friend_cnt = 0) 
+
+```{r}
+Highnote$ynsf = ifelse(Highnote$subscriber_friend_cnt >= 1, 1, 0)
+
+```
+
+#1. Pre-analysis using non-matched data
+*1.1: Difference-in-means: outcome variable
+Using adopter as the outcome variable of interest. (1 = adopter; 0 = non-adopter), the independent variable of interest is ynsf. (1 = having subcriber friends; 0 = not having)
+
+```{r}
+with(Highnote, t.test(adopter ~ ynsf))
+
+```
+
+We see that the difference-in-means is statistically significant at conventional levels of confidence.
+
+* 1.2: Difference-in-means: pre-treatment covariates
+calculate the mean for each covariate by the treatment status:
+
+```{r}
+hn_cov2 <- c('age', 'male', 'friend_cnt', 'avg_friend_age', 'avg_friend_male', 'friend_country_cnt',
+            'songsListened', 'lovedTracks', 'posts', 'playlists',
+            'shouts', 'tenure', 'good_country')
+Highnote %>%
+  group_by(ynsf) %>%
+  select(one_of(hn_cov2)) %>%
+  summarise_all(funs(mean(., na.rm = T)))
+```
+
+Then we can carry out t-tests to evaluate whether these means are statistically distinguishable:
+
+```{r}
+lapply(hn_cov2, function(v) {
+  t.test(Highnote[, v] ~ Highnote[, 'ynsf'])
+})
+```
+
+We see that except for 'male', all mean value of other variables are statistically distinguishable.
+We should  then exclude 'male' in the PSM logit model.
+
+#2. Propensity score estimation
+We estimate the propensity score by running a logit model, where the outcome variable is a binary variable indicating treatment status.
+
+```{r}
+Highnote <- Highnote %>% mutate(songsListened_1k = songsListened / 1000)
+
+h_ps <- glm(ynsf ~ age + friend_cnt + avg_friend_age + avg_friend_male + friend_country_cnt
+            + songsListened_1k + lovedTracks + posts + playlists
+            + shouts + tenure + good_country, family = binomial(), data = Highnote)
+summary(h_ps)
+```
+
+After that, we calculate the propensity score for each user. That is, the user’s predicted probability of being Treated, given the estimates from the logit model. 
+
+```{r}
+prs_df <- data.frame(pr_score = predict(h_ps, type = "response"),
+                     ynsf = h_ps$model$ynsf)
+head(prs_df)
+```
+
+*2.1 Examining the region of common support
+We can plot histograms of the estimated propensity scores by treatment status:
+
+```{r}
+labs <- paste("Actual fee friends:", c("Have", "Don't have"))
+prs_df %>%
+  mutate(ynsf = ifelse(ynsf == 1, labs[1], labs[2])) %>%
+  ggplot(aes(x = pr_score)) +
+  geom_histogram(color = "white") +
+  facet_wrap(~ynsf) +
+  xlab("Probability of having fee friends") +
+  theme_bw()
+```
+
+#3. Executing a matching algorithm
+We find pairs of observations that have very similar propensity scores, but that differ in their treatment status.
+
+```{r}
+Highnote_nomiss <- Highnote %>%  # MatchIt does not allow missing values
+  select(adopter, ynsf, one_of(hn_cov2)) %>%
+  na.omit()
+
+mod_match <- matchit(ynsf ~ age + friend_cnt + avg_friend_age + avg_friend_male + friend_country_cnt
+                     + songsListened + lovedTracks + posts + playlists
+                     + shouts + tenure + good_country,
+                     method = "nearest", data = Highnote_nomiss)
+
+```
+
+get some information about how successful the matching was:
+
+```{r}
+summary(mod_match)
+plot(mod_match)
+```
+
+create a dataframe containing only the matched observations:
+
+```{r}
+data_m <- match.data(mod_match)
+dim(data_m)
+```
+
+The final dataset is smaller than the original: it contains 19646 observations, meaning that 9823 pairs of treated and control observations were matched.
+The final dataset contains a variable called distance, which is the propensity score.
+
+#4. Examining covariate balance in the matched sample
+* 4.1: Visual inspection
+plot the mean of each covariate against the estimated propensity score, separately by treatment status.
+
+```{r}
+fin_bal <- function(data, variable) {
+  data$variable <- data[, variable]
+  if (variable == 'songsListened') data$variable <- data$variable / 10^3
+  data$ynsf <- as.factor(data$ynsf)
+  support <- c(min(data$variable), max(data$variable))
+  ggplot(data, aes(x = distance, y = variable, color = ynsf)) +
+    geom_point(alpha = 0.2, size = 1.3) +
+    geom_smooth(method = "loess", se = F) +
+    xlab("Propensity score") +
+    ylab(variable) +
+    theme_bw() +
+    ylim(support)
+}
+
+grid.arrange(
+  fin_bal(data_m, "age"),
+  fin_bal(data_m, "friend_cnt")  + theme(legend.position = "none"),
+  fin_bal(data_m, "avg_friend_age"),
+  fin_bal(data_m, "avg_friend_male") + theme(legend.position = "none"),
+  fin_bal(data_m, "friend_country_cnt"),
+  fin_bal(data_m, "songsListened") + theme(legend.position = "none"),
+  fin_bal(data_m, "lovedTracks"),
+    nrow =4, widths = c(1, 0.8)
+)
+grid.arrange(  
+  fin_bal(data_m, "lovedTracks"),
+  fin_bal(data_m, "posts") + theme(legend.position = "none"),
+  fin_bal(data_m, "playlists"),
+  fin_bal(data_m, "shouts") + theme(legend.position = "none"),
+  fin_bal(data_m, "tenure"),
+  fin_bal(data_m, "good_country"),
+  nrow = 3, widths = c(1, 0.8)
+)
+```
+
+* 4.2: Difference-in-means
+test mean difference for each covariate:
+
+```{r}
+data_m %>%
+  group_by(ynsf) %>%
+  select(one_of(hn_cov2)) %>%
+  summarise_all(funs(mean))
+
+lapply(hn_cov2, function(v) {
+  t.test(data_m[, v] ~ data_m$ynsf)
+})
+```
+
+Estimating treatment effects: Estimating the treatment effect is simple once we have a matched sample that we are happy with. We can use a t-test:
+```{r}
+with(data_m, t.test(adopter ~ ynsf))
+
+```
+
+Here for matched data:  adopter by ynsf, t = -18.938, comparing to before matching t = -30.961.
+
+We can also do binomial regression:
+
+```{r}
+glm_treat1 <- glm(adopter ~ ynsf, family = binomial(), data = data_m)
+summary(glm_treat1)
+
+glm_treat2 <- glm(adopter ~ ynsf + age + friend_cnt + avg_friend_age + avg_friend_male + friend_country_cnt
+                 + lovedTracks + posts + playlists
+                + shouts + tenure + good_country
+                 +  I(songsListened / 10^3), family = binomial(), data = data_m)
+summary(glm_treat2)
+```
+
+After we eliminate the background variable differences for treatment and control group,(control for the differences).  Having subscriber friends has higher probability of being adopter than don't have subscriber friends
+
+
+# Regression Analysis
+Now, we will use a logistic regression approach to test which variables (including subscriber friends) are significant for explaining the likelihood of becoming an adopter. 
+
+Before we fitting into the logistic regression model, let's see the correlation between the predictors.
+
+```{r}
+res2 <- cor(Highnote)
+res2
+round(res2, 4)
+
+corrplot(res2)
+```
+Based on the analysis, we find that the following varaibles are relatively highly correlated:
+age & avg_friend_age；
+male & avg_friend_male;
+friend_cnt & friend_country_cnt；
+friend_cnt & subscriber_friend_cnt；
+friend_country_cnt & subscriber_firend_cnt.
+
+In order to build a better regression model, we should not use independent variables which are relatively highly correlated. 
+Let's see what it shows when putting all the variables into the model.
+```{r}
+mod.fit1 <- glm(adopter ~ age + male + friend_cnt + avg_friend_age + avg_friend_male + friend_country_cnt
+                 + subscriber_friend_cnt + lovedTracks + posts + playlists + songsListened_1k
+                + shouts + tenure + good_country, family = binomial(), data = Highnote)
+summary(mod.fit1)
+```
+
+Multicollinearity can be detected using a statistic called the variance inflation factor (VIF). For any predictor variable, the square root of the VIF indicates the degree to which the confidence interval for that variable’s regression parameter is expanded relative to a model with uncorrelated predictors (hence the name). VIF values are pro- vided by the vif() function in the car package. As a general rule, sqrt(vif) > 2 indicates a multicollinearity problem. 
+```{r}
+vif(mod.fit1)
+sqrt(vif(mod.fit1)) > 2
+outlierTest(mod.fit1)
+```
+The results indicate that variable friend_cnt has a multicollinearity problem with these predictor variables.
+We'll take out this variable to further analyze.
+Further, based on the mean analysis graph, logical assumption, and mod.fit1, we choose to include variable the following model:
+age, subscriber_friend_cnt, lovedTracks, playlists, songsListened_1k, good_country
+
+```{r}
+mod.fit2 <- glm(adopter ~ age + subscriber_friend_cnt
+                + lovedTracks + playlists + songsListened_1k
+                 + good_country, family = binomial(), data = Highnote)
+summary(mod.fit2)
+
+```
+
+
+```{r}
+vif(mod.fit2)
+sqrt(vif(mod.fit2)) > 2
+outlierTest(mod.fit2)
+```
+
+Note that the model is no longer suffered from multicollinearity problem, but still, we have some outliers, we will delete these outliers from the data set, and do a regression based on the new data set.
+
+```{r}
+HighnoteNew <- Highnote[c(-32663,-21293,-10623,-37360,-3364,-12898,-27575,-30653,-12277),]
+
+mod.fit3 <- glm(adopter ~ age + subscriber_friend_cnt*age
+                + lovedTracks + playlists + songsListened_1k
+                 + good_country, family = binomial(), data = HighnoteNew)
+summary(mod.fit3)
+```
+The AIC changed from 22894 to 22596, indicating it's a better model.
+
+The expected variance for data drawn from a binomial distribution is σ2 = nπ(1 − π), where n is the number of observations and π is the probability of belonging to the Y = 1 group. Overdispersion occurs when the observed variance of the response variable is larger than what would be expected from a binomial distribution. Overdispersion can lead to distorted test standard errors and inaccurate tests of significance.
+We can also test if there is an overdispersion problem  with the model using the following code:
+```{r}
+deviance(mod.fit3)/df.residual(mod.fit3)
+```
+With logistic regression, overdispersion is suggested if the ratio of the residual deviance to the residual degrees of freedom is much larger than 1, which is not our case here.
+
+
+By looking at p-value, all the variables, including the intercept, are significant with p-value less than 0.01.
+Let’s look at the regression coefficients:
+
+```{r}
+coef(mod.fit3)
+
+```
+
+In a logistic regression, the response being modeled is the log(odds) that Y = 1. The regression coefficients give the change in log(odds) in the response for a unit change in the predictor variable, holding all other predictor variables constant.
+Because log(odds) are difficult to interpret, we can exponentiate them to put the results on an odds scale:
+
+```{r}
+exp(coef(mod.fit3))
+
+```
+
+Now we can see that the odds of a fee-user conversion are increased by a factor of 1.00078249 for a one-unit increase in 'lovedTracks', (holding 'subscriber_friend_cnt', 'lovedTracks', 'playlists', 'songsListened_1k', 'good_country' constant). Conversely, the odds of a fee-user conversion are multiplied by a factor of 0.0007821799 for a one-unit increase in 'lovedTracks'. 
+
+The odds of a fee-user conversion increase with 'age', 'subscriber_friend_cnt', 'lovedTracks', 'playlists', 'songsListened_1k', and decrease with 'good_country', 'age:subscriber_friend_cnt'.
+
+A negative interaction coefficient in 'age:subscriber_friend_cnt' means that the effect of the combined action of two predictors is less then the sum of the individual effects.
+
+Because the predictor variables can’t equal 0, the intercept isn’t meaningful in this case.
+
+
+
+# Takeaways
+
+From my analysis. The results inform a “free-to-fee” strategy for High Note as follows:
+
+When the company trying to put money in converting fee-users, try to:
+
+* Targeting users in middle or late 20's.
+* Targeting users with higher user engagement, (loved more tracks, made more playlists, listened more songs, however,  posts made and shouts received are not necessarily important).
+*  Targeting users have (more) subscriber friend since there is peer influence exist.
+*  Targeting more on users that from countires other than US, UK or Germany.
